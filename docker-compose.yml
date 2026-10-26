@@ -1,0 +1,22 @@
+services:
+  terminal-youtube:
+    build: .
+    image: terminal-youtube
+    stdin_open: true
+    tty: true
+    environment:
+      - DISPLAY=${DISPLAY}
+      - PULSE_SERVER=unix:/run/user/1000/pulse/native
+      - TERM=${TERM:-xterm-256color}
+      - COLORTERM
+      - TERM_PROGRAM
+      - KONSOLE_VERSION
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - ${XDG_RUNTIME_DIR}/pulse/native:/run/user/1000/pulse/native
+      - yt-cache:/home/app/.cache/terminal-youtube
+    devices:
+      - /dev/dri:/dev/dri
+
+volumes:
+  yt-cache:

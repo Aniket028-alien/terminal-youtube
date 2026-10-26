@@ -1,0 +1,5 @@
+textual
+textual-image
+httpx
+yt-dlp[default]
+python-mpv

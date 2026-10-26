@@ -6,6 +6,7 @@ No Textual code here, so it can be used and tested on its own.
 from __future__ import annotations
 
 import locale
+import logging
 import os
 import sys
 from pathlib import Path
@@ -49,11 +50,22 @@ def play_with_mpv(webpage_url: str) -> None:
     if bin_dir not in os.environ.get("PATH", "").split(os.pathsep):
         os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
 
+    # Intel's Vulkan driver prints warnings straight to the terminal, which
+    # garbles the TUI. Hide Vulkan so mpv uses OpenGL instead.
+    os.environ.setdefault("VK_LOADER_DRIVERS_DISABLE", "*")
+
     errors: list[str] = []
 
     def on_log(level: str, component: str, message: str) -> None:
+        text = message.strip()
+        logging.warning("mpv [%s] %s: %s", level, component, text)
         if level in ("error", "fatal"):
-            errors.append(f"{component}: {message.strip()}")
+            errors.append(f"{component}: {text}")
+
+    # Optional override, e.g. TY_MPV_VO=x11 for Docker on macOS/WSL.
+    extra_options = {"gpu_api": os.environ.get("TY_MPV_GPU_API", "opengl")}
+    if os.environ.get("TY_MPV_VO"):
+        extra_options["vo"] = os.environ["TY_MPV_VO"]
 
     player = mpv.MPV(
         ytdl=True,
@@ -64,15 +76,30 @@ def play_with_mpv(webpage_url: str) -> None:
         force_window="yes",
         log_handler=on_log,
         loglevel="warn",
+        **extra_options,
     )
+
+    state = {"seen_active": False, "switching": False}
 
     @player.event_callback("file-loaded")
     def _on_loaded(_event) -> None:
+        state["switching"] = False
         # Clear the one-shot resume position used when changing quality.
         try:
             player.start = "none"
         except Exception:
             pass
+
+    @player.property_observer("idle-active")
+    def _on_idle(_name, idle) -> None:
+        # mpv is idle before loading (ignore), busy while loading/playing,
+        # and idle again when the video ended OR failed to load. In both
+        # cases close the window so the TUI regains control and can show
+        # the error instead of leaving a blank "Drop files here" window.
+        if idle is False:
+            state["seen_active"] = True
+        elif idle and state["seen_active"] and not state["switching"]:
+            player.command("quit")
 
     def change_quality(step: int) -> None:
         global _quality_index
@@ -86,6 +113,7 @@ def play_with_mpv(webpage_url: str) -> None:
         height = QUALITIES[new_index]
         position = player.time_pos or 0
 
+        state["switching"] = True
         player.show_text(f"Quality: {height}p ...", 3000)
         player.ytdl_format = _format_for(height)
         player.start = str(int(position))
@@ -118,7 +146,9 @@ def play_with_mpv(webpage_url: str) -> None:
     try:
         player.play(webpage_url)
         player.show_text(
-            "Ctrl+Up/Down: quality   < >: speed   [ ]: fine speed", 4000
+            "Loading video (can take up to 30 s)...   "
+            "Ctrl+Up/Down: quality   < >: speed",
+            8000,
         )
         # wait_for_playback() would return when the file is replaced during a
         # quality change, so wait for the whole player to shut down instead.
